@@ -1,0 +1,8 @@
+id,name,pocName,pocEmail,primaryColor,secondaryColor,status,deliverableQuota,tier
+brand_001,BSS,Neha Kapur,neha@bombaysweetshop.com,#E65100,#FFE0B2,ACTIVE,45,Enterprise Retainer
+brand_002,Big Leap,Rajesh Sharma,rajesh@bigleap.com,#1E88E5,#BBDEFB,ACTIVE,27,Growth Retainer
+brand_003,Phone Pe,Pooja Verma,pooja@phonepe.com,#6739B7,#D1C4E9,ACTIVE,25,Enterprise Retainer
+brand_004,TBM,Sachin (Admin),sachin@theboredmonkey.com,#FFE600,#FFF9C4,ACTIVE,4,Internal Studio
+brand_005,Unseen Men,Amit Patel,amit@unseenmen.com,#10B981,#A7F3D0,ACTIVE,4,Boutique Account
+brand_006,Everstage,Simran Kaur,simran@everstage.com,#06B6D4,#CFFAFE,ACTIVE,2,Completed Retainer
+brand_007,Nodd Man,Gaurav Singh,gaurav@noddman.com,#64748B,#E2E8F0,ACTIVE,0,Onboarding

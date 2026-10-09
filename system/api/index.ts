@@ -1,0 +1,217 @@
+import http, { type IncomingMessage, type ServerResponse } from "node:http";
+import os from "node:os";
+import analyticsDashboard from "../server/handlers/analytics-dashboard";
+import analyticsReport from "../server/handlers/analytics-report";
+import auth from "../server/handlers/auth";
+import campaignAnalytics from "../server/handlers/campaign-analytics";
+import campaignStats from "../server/handlers/campaign-stats";
+import intelligenceMailboxes from "../server/handlers/mailboxes";
+import intelligenceContacts from "./intelligence/contacts";
+import intelligenceCheckBatch from "./intelligence/check-batch";
+import intelligenceCheckContact from "./intelligence/check-contact";
+import intelligenceCampaigns from "./intelligence/campaigns";
+import intelligenceSuppressions from "./intelligence/suppressions";
+import intelligenceSuppressContacts from "./intelligence/suppress-contacts";
+import intelligenceDeleteContacts from "./intelligence/delete-contacts";
+import intelligenceSegments from "./intelligence/segments";
+import campaignSteps from "./campaigns/steps";
+import campaignLogs from "./campaigns/logs";
+import organization from "../server/handlers/organization";
+import smartleadStatus from "./smartlead/status";
+import smartleadCreateCampaign from "./smartlead/create-campaign";
+import smartleadCampaigns from "./smartlead/campaigns";
+import smartleadCampaignAnalytics from "./smartlead/campaign-analytics";
+import smartleadCampaignLeadsStats from "./smartlead/campaign-leads-stats";
+import smartleadSyncAndStart from "./smartlead/sync-and-start";
+import smartleadUpdateSequences from "./smartlead/update-sequences";
+import webhookSmartlead from "./webhooks/smartlead";
+import chat from "./chat";
+import { assistantHandler } from "./assistant";
+import { automationHandler } from "./automation";
+import { agentSessionsHandler } from "./agentSessions";
+
+type Handler = (req: IncomingMessage, res: ServerResponse) => unknown | Promise<unknown>;
+
+// Multiplex all production routes for Email System 101
+// Acts as both a standalone high-throughput Node.js daemon (for VPS/PM2)
+// and an exported serverless handler (for Vercel backwards-compatibility).
+const routes: Record<string, Handler> = {
+    "/api/analytics/dashboard": analyticsDashboard,
+    "/api/analytics/report": analyticsReport,
+    "/api/campaigns/stats": campaignStats,
+    "/api/campaigns/analytics": campaignAnalytics,
+    "/api/intelligence/mailboxes": intelligenceMailboxes,
+    "/api/intelligence/contacts": intelligenceContacts,
+    "/api/intelligence/check-batch": intelligenceCheckBatch,
+    "/api/intelligence/check-contact": intelligenceCheckContact,
+    "/api/intelligence/campaigns": intelligenceCampaigns,
+    "/api/intelligence/suppressions": intelligenceSuppressions,
+    "/api/intelligence/suppress-contacts": intelligenceSuppressContacts,
+    "/api/intelligence/delete-contacts": intelligenceDeleteContacts,
+    "/api/intelligence/segments": intelligenceSegments,
+    "/api/campaigns/steps": campaignSteps,
+    "/api/campaigns/logs": campaignLogs,
+    "/api/campaigns": intelligenceCampaigns,
+    "/api/v1/campaigns": intelligenceCampaigns,
+    "/campaigns": intelligenceCampaigns,
+    "/v1/campaigns": intelligenceCampaigns,
+    "/api/smartlead/status": smartleadStatus,
+    "/api/smartlead/create-campaign": smartleadCreateCampaign,
+    "/api/smartlead/campaigns": smartleadCampaigns,
+    "/api/smartlead/campaign-analytics": smartleadCampaignAnalytics,
+    "/api/smartlead/campaign-leads-stats": smartleadCampaignLeadsStats,
+    "/api/smartlead/sync-and-start": smartleadSyncAndStart,
+    "/api/smartlead/update-sequences": smartleadUpdateSequences,
+    "/api/webhooks/smartlead": webhookSmartlead,
+    "/api/auth/config": auth,
+    "/api/v1/auth/config": auth,
+    "/v1/auth/config": auth,
+    "/auth/config": auth,
+    "/api/chat": chat,
+    "/api/assistant/health": assistantHandler,
+    "/api/assistant/query": assistantHandler,
+    "/api/assistant/docs": assistantHandler,
+    "/api/assistant/schema": assistantHandler,
+    "/api/assistant/workflows": assistantHandler,
+    "/api/automation/score-lead": automationHandler,
+    "/api/automation/generate-emails": automationHandler,
+    "/api/automation/analyze-reply": automationHandler,
+    "/api/automation/recommend-strategy": automationHandler,
+    "/api/automation/anomalies": automationHandler,
+    "/api/automation/improvements": automationHandler,
+    "/api/automation/approval-queue": automationHandler,
+    "/api/automation/dashboard": automationHandler,
+    "/api/automation/approve-emails": automationHandler,
+    "/api/health": (_req, res) => {
+        const mem = process.memoryUsage();
+        const totalMem = os.totalmem();
+        const freeMem = os.freemem();
+        const usedMem = totalMem - freeMem;
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+            status: "ok",
+            uptime_seconds: Math.round(process.uptime()),
+            timestamp: new Date().toISOString(),
+            system: {
+                platform: os.platform(),
+                cpus: os.cpus().length,
+                loadavg: os.loadavg(),
+                total_ram_mb: Math.round(totalMem / (1024 * 1024)),
+                free_ram_mb: Math.round(freeMem / (1024 * 1024)),
+                used_ram_mb: Math.round(usedMem / (1024 * 1024)),
+                ram_usage_pct: Math.round((usedMem / totalMem) * 100),
+            },
+            node_process: {
+                rss_mb: Math.round(mem.rss / (1024 * 1024)),
+                heap_used_mb: Math.round(mem.heapUsed / (1024 * 1024)),
+                heap_total_mb: Math.round(mem.heapTotal / (1024 * 1024)),
+            }
+        }));
+    },
+    "/healthz": (_req, res) => {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ status: "ok", uptime: process.uptime(), timestamp: new Date().toISOString() }));
+    },
+};
+
+// Prefix routes: exact-path map above wins first, then these.
+const prefixes: [string, Handler][] = [
+    ["/v1/ai/sessions", agentSessionsHandler],
+    ["/ai/sessions", agentSessionsHandler],
+    ["/api/ai/sessions", agentSessionsHandler],
+    ["/api/auth/", auth],
+    ["/api/v1/auth/", auth],
+    ["/v1/auth/", auth],
+    ["/auth/", auth],
+    ["/api/organization", organization],
+    ["/api/campaigns/", intelligenceCampaigns],
+    ["/api/smartlead/campaigns/", smartleadCampaigns],
+    ["/api/v1/campaigns", intelligenceCampaigns],
+    ["/campaigns", intelligenceCampaigns],
+    ["/v1/campaigns", intelligenceCampaigns],
+];
+
+export default async function handler(req: IncomingMessage, res: ServerResponse) {
+    const raw = (req.url || "/").split("?")[0];
+    const pathname = raw.replace(/\/+$/, "") || "/";
+
+    // OWASP Defensive Security Headers
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("X-Frame-Options", "SAMEORIGIN");
+    res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+    res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+
+    // CORS configuration supporting authenticated credentials
+    const origin = req.headers.origin;
+    const allowedOrigins = process.env.ALLOWED_ORIGINS
+        ? process.env.ALLOWED_ORIGINS.split(",").map((s) => s.trim())
+        : ["http://localhost:5173", "http://localhost:3000", "http://127.0.0.1:5173", "http://localhost:3001"];
+
+    if (origin && (allowedOrigins.includes(origin) || process.env.NODE_ENV !== "production")) {
+        res.setHeader("Access-Control-Allow-Origin", origin);
+        res.setHeader("Access-Control-Allow-Credentials", "true");
+    } else if (!origin) {
+        res.setHeader("Access-Control-Allow-Origin", "*");
+    } else {
+        res.setHeader("Access-Control-Allow-Origin", allowedOrigins[0] || "*");
+    }
+
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, x-webhook-signature, x-smartlead-signature");
+
+    if (req.method === "OPTIONS") {
+        res.statusCode = 204;
+        res.end();
+        return;
+    }
+
+    const target = routes[pathname] ?? prefixes.find(([prefix]) => pathname.startsWith(prefix))?.[1];
+
+    if (!target) {
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "not_found", path: pathname }));
+        return;
+    }
+
+    return target(req, res);
+}
+
+// Start standalone HTTP daemon when executed directly by PM2 or node/tsx
+const isDirectExecution =
+    !process.env.VERCEL &&
+    (process.env.STANDALONE_SERVER === "true" ||
+     process.argv[1]?.endsWith("api/index.ts") ||
+     process.argv[1]?.endsWith("api\\index.ts") ||
+     process.argv[1]?.includes("api/index") ||
+     process.argv[1]?.includes("api\\index") ||
+     require.main === module);
+
+if (isDirectExecution) {
+    const port = Number(process.env.PORT) || 3001;
+    const host = process.env.HOST || "0.0.0.0";
+    const server = http.createServer((req, res) => {
+        Promise.resolve(handler(req, res)).catch((err) => {
+            console.error("[Unhandled API Error]", err);
+            if (!res.headersSent) {
+                res.writeHead(500, { "Content-Type": "application/json" });
+                res.end(JSON.stringify({ error: "internal_server_error", message: err?.message }));
+            }
+        });
+    });
+
+    server.listen(port, host, () => {
+        console.log(`[Email System API] Listening on http://${host}:${port} (PID: ${process.pid})`);
+    });
+
+    const shutdown = (signal: string) => {
+        console.log(`[Email System API] Received ${signal}, closing server gracefully...`);
+        server.close(() => {
+            console.log("[Email System API] Server closed.");
+            process.exit(0);
+        });
+        setTimeout(() => process.exit(1), 5000);
+    };
+
+    process.on("SIGTERM", () => shutdown("SIGTERM"));
+    process.on("SIGINT", () => shutdown("SIGINT"));
+}

@@ -1,0 +1,458 @@
+// Page primitives — dense, edge-to-edge, hairline dividers.
+//
+// Inspired by brae's dashboard chrome: pages fill the white content panel
+// to its edges, sections separate by a single hairline (border-b
+// border-slate-200), not by gutter or shadow. Small tracked-uppercase
+// eyebrow labels replace large titles. Stats live in a strip cell across
+// the full width, not in scattered cards.
+//
+//   <Page>
+//     <PageTopbar eyebrow="Accounts" subtitle="One row per mailbox">
+//       <Action>Add account</Action>
+//     </PageTopbar>
+//     <StatStrip>
+//       <Stat label="Total" value={42} />
+//       <Stat label="Healthy" value={36} accent />
+//       ...
+//     </StatStrip>
+//     <PageBody>{...table...}</PageBody>
+//   </Page>
+
+import React from "react";
+import { Link } from "react-router-dom";
+import { cn } from "@/lib/utils";
+
+// Internal app paths navigate client-side (React Router Link, no full reload);
+// external URLs (http..., mailto:, //) stay as a plain anchor.
+function isInternalHref(href: string): boolean {
+    return href.startsWith("/") && !href.startsWith("//");
+}
+
+/**
+ * Page — outer frame. Fills its parent (the white content panel) without
+ * a max-width ceiling or padding. Sub-sections paint their own structure.
+ */
+export function Page({ children, className }: {
+    children: React.ReactNode;
+    className?: string;
+    /** Deprecated — kept so old callers compile. New layout fills the panel. */
+    width?: "default" | "wide" | "full";
+}) {
+    return (
+        <div className={cn("flex flex-col min-h-full bg-[#FAF9F5]", className)}>
+            {children}
+        </div>
+    );
+}
+
+/**
+ * PageTopbar — 48px topbar at the top of a page. Editorial headline at the
+ * left, an inline subtitle for context, actions on the right.
+ */
+export function PageTopbar({
+    eyebrow,
+    title,
+    subtitle,
+    children,
+    className,
+}: {
+    eyebrow?: string;
+    title?: string;
+    subtitle?: string;
+    children?: React.ReactNode;
+    className?: string;
+}) {
+    const mainTitle = title || eyebrow || "";
+    const subEyebrow = title && eyebrow ? eyebrow : undefined;
+
+    return (
+        <div
+            className={cn(
+                // Single 48px row on >=md; on mobile it wraps so action
+                // clusters drop to a second line instead of widening the page.
+                "min-h-12 md:h-12 px-5 py-1.5 md:py-0 border-b border-stone-200/90 flex flex-wrap md:flex-nowrap items-center gap-3 gap-y-1.5 shrink-0 bg-white sticky top-0 z-10",
+                className,
+            )}
+        >
+            <div className="flex items-center gap-2.5 min-w-0">
+                {subEyebrow && (
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500 font-mono bg-stone-100 px-1.5 py-0.5 rounded border border-stone-200/80 shrink-0">
+                        {subEyebrow}
+                    </span>
+                )}
+                <span className="font-editorial text-[20px] md:text-[22px] font-normal tracking-tight text-slate-950 whitespace-nowrap shrink-0">
+                    {mainTitle}
+                </span>
+                {subtitle && (
+                    <>
+                        <div className="h-4 w-px bg-stone-300 shrink-0 hidden sm:block" />
+                        <span className="text-[12.5px] text-slate-600 font-medium truncate min-w-0 hidden sm:inline">
+                            {subtitle}
+                        </span>
+                    </>
+                )}
+            </div>
+            {children && <div className="ml-auto flex items-center gap-2 min-w-0 flex-wrap justify-end md:flex-nowrap shrink-0">{children}</div>}
+        </div>
+    );
+}
+
+/**
+ * Primary topbar action — solid sky pill at 28px tall.
+ */
+export function TopbarAction({
+    children,
+    label,
+    onClick,
+    href,
+    icon,
+    variant = "primary",
+    disabled = false,
+    className,
+}: {
+    children?: React.ReactNode;
+    label?: string;
+    onClick?: () => void;
+    href?: string;
+    icon?: React.ReactNode;
+    variant?: "primary" | "ghost";
+    disabled?: boolean;
+    className?: string;
+}) {
+    const content = children ?? label;
+    const cls =
+        variant === "primary"
+            ? "bg-[#FFE600] hover:bg-[#F2DC00] text-slate-950 font-semibold border border-black/10 shadow-xs"
+            : "border border-slate-300 hover:border-slate-900 text-slate-800 hover:text-black bg-white font-medium shadow-2xs";
+    if (href) {
+        const actionCls = cn(
+            "h-7 px-2.5 rounded-md inline-flex items-center gap-1.5 text-[12px] font-medium transition-colors cursor-pointer",
+            cls,
+            className,
+        );
+        if (isInternalHref(href)) {
+            return (
+                <Link to={href} className={actionCls}>
+                    {icon}
+                    {content}
+                </Link>
+            );
+        }
+        return (
+            <a href={href} className={actionCls}>
+                {icon}
+                {content}
+            </a>
+        );
+    }
+    return (
+        <button
+            onClick={onClick}
+            disabled={disabled}
+            className={cn(
+                "h-7 px-2.5 rounded-md inline-flex items-center gap-1.5 text-[12px] font-medium transition-colors disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer",
+                cls,
+                className,
+            )}
+        >
+            {icon}
+            {content}
+        </button>
+    );
+}
+
+/**
+ * StatStrip — full-width grid of stats with vertical-rule dividers and a
+ * bottom hairline. Use Stat as children.
+ */
+export function StatStrip({ children, cols = 4 }: { children: React.ReactNode; cols?: 2 | 3 | 4 | 5 | 6 }) {
+    const gridCls = {
+        2: "grid-cols-2",
+        3: "grid-cols-2 md:grid-cols-3 max-md:[&>*:last-child]:col-span-2",
+        4: "grid-cols-2 md:grid-cols-4",
+        5: "grid-cols-2 md:grid-cols-5 max-md:[&>*:last-child]:col-span-2",
+        6: "grid-cols-2 md:grid-cols-3 lg:grid-cols-6 max-md:[&>*:last-child]:col-span-2",
+    }[cols];
+    return (
+        <div
+            className={cn(
+                "grid border-b border-slate-200 shrink-0 bg-white",
+                // On the mobile 2-col layout, drop the right-hand hairline on
+                // cells that end a row so no stray rule hugs the panel edge.
+                "max-md:[&>*:nth-child(2n)]:border-r-0 max-md:[&>*:last-child]:border-r-0",
+                gridCls,
+            )}
+        >
+            {children}
+        </div>
+    );
+}
+
+/**
+ * Stat — one cell of the StatStrip. `accent` shows a small pulsing sky
+ * dot next to the label. Each cell has a right border that compounds into
+ * the strip's vertical-rule pattern; the last one drops it via `last`.
+ */
+export function Stat({
+    label,
+    value,
+    sub,
+    accent = false,
+    href,
+    last = false,
+    onClick,
+}: {
+    label: string;
+    value: React.ReactNode;
+    sub?: string;
+    accent?: boolean;
+    href?: string;
+    onClick?: () => void;
+    last?: boolean;
+}) {
+    const inner = (
+        <>
+            <div className="flex items-center gap-2">
+                <span className="text-[10px] uppercase tracking-[0.14em] text-slate-500 font-semibold">
+                    {label}
+                </span>
+                {accent && (
+                    <span className="size-2 rounded-full bg-[#FFE600] ring-2 ring-[#FFE600]/30 shadow-xs" />
+                )}
+                {(href || onClick) && (
+                    <span className="ml-auto text-[11px] text-slate-400 group-hover:text-slate-600 transition-colors">
+                        →
+                    </span>
+                )}
+            </div>
+            <div className="text-[22px] text-slate-900 font-bold tracking-tight leading-none mt-2 tabular-nums">
+                {typeof value === "number" ? value.toLocaleString() : value}
+            </div>
+            {sub && (
+                <div className="text-[10px] text-slate-400 mt-1 font-mono truncate">{sub}</div>
+            )}
+        </>
+    );
+    const cls = cn(
+        "group px-5 py-3 md:py-4 transition-colors",
+        !last && "border-r border-slate-200",
+        (href || onClick) && "hover:bg-slate-50 cursor-pointer",
+    );
+    if (href) {
+        return isInternalHref(href) ? (
+            <Link to={href} className={cls}>
+                {inner}
+            </Link>
+        ) : (
+            <a href={href} className={cls}>
+                {inner}
+            </a>
+        );
+    }
+    if (onClick) {
+        return (
+            <button onClick={onClick} className={cn(cls, "text-left")}>
+                {inner}
+            </button>
+        );
+    }
+    return <div className={cls}>{inner}</div>;
+}
+
+/**
+ * PageBody — scrollable content area below the topbar/strip. No padding;
+ * children paint their own structure (a table, a kanban, etc.).
+ */
+export function PageBody({ children, className }: { children: React.ReactNode; className?: string }) {
+    return (
+        <div className={cn("flex-1 min-h-0 overflow-auto overscroll-x-contain", className)}>{children}</div>
+    );
+}
+
+/**
+ * SectionBar — secondary toolbar inside a PageBody. Same anatomy as the
+ * PageTopbar but a touch slimmer (h-9) and with a lighter divider, so it
+ * reads as a sub-header rather than a peer.
+ */
+export function SectionBar({
+    label,
+    title,
+    description,
+    count,
+    children,
+    className,
+}: {
+    label?: string;
+    title?: string;
+    description?: string;
+    count?: number | string;
+    children?: React.ReactNode;
+    className?: string;
+}) {
+    const textLabel = label || title || "";
+    return (
+        <div
+            className={cn(
+                // Single 36px row on >=md; on mobile it wraps so a full-width
+                // search + filters stack instead of crowding off the edge.
+                "min-h-9 md:h-9 px-5 py-1.5 md:py-0 border-b border-stone-200/80 flex flex-wrap md:flex-nowrap items-center gap-x-2.5 gap-y-1.5 shrink-0 bg-stone-50/50",
+                className,
+            )}
+        >
+            <div className="flex items-center gap-2 min-w-0">
+                <span className="text-[10.5px] uppercase tracking-[0.14em] text-slate-600 font-semibold font-mono">
+                    {textLabel}
+                </span>
+                {count !== undefined && (
+                    <span className="font-mono text-[10px] bg-stone-200/70 text-slate-700 px-1.5 py-0.2 rounded font-semibold tabular-nums">
+                        {count}
+                    </span>
+                )}
+                {description && (
+                    <span className="text-[11.5px] text-slate-500 font-normal hidden sm:inline truncate max-w-md">
+                        • {description}
+                    </span>
+                )}
+            </div>
+            {children && (
+                <div className="ml-auto flex items-center gap-1.5 flex-wrap justify-end min-w-0">
+                    {children}
+                </div>
+            )}
+        </div>
+    );
+}
+
+/**
+ * Row — generic flexible h-11 list row with a hover state and bottom
+ * hairline. Compose freely; use status dots / mono IDs / pill labels
+ * to taste.
+ */
+export function Row({
+    children,
+    href,
+    onClick,
+    className,
+}: {
+    children: React.ReactNode;
+    href?: string;
+    onClick?: () => void;
+    className?: string;
+}) {
+    const cls = cn(
+        "group h-11 px-5 flex items-center gap-3 border-b border-slate-200/60 transition-colors",
+        (href || onClick) && "hover:bg-slate-50/80 cursor-pointer",
+        className,
+    );
+    if (href) {
+        return isInternalHref(href) ? (
+            <Link to={href} className={cls}>{children}</Link>
+        ) : (
+            <a href={href} className={cls}>{children}</a>
+        );
+    }
+    if (onClick) return <button onClick={onClick} className={cn(cls, "w-full text-left")}>{children}</button>;
+    return <div className={cls}>{children}</div>;
+}
+
+/**
+ * EmptyBlock — tight text-led empty state. Sized to slot inside a
+ * PageBody or a section, not occupy the whole page.
+ */
+export function EmptyBlock({
+    title,
+    body,
+    cta,
+}: {
+    title: string;
+    body?: string;
+    cta?: React.ReactNode;
+}) {
+    return (
+        <div className="px-5 py-16 text-center bg-[#FAF9F5]/30 flex flex-col items-center justify-center">
+            <h3 className="font-editorial text-2xl font-normal text-slate-950 tracking-tight mb-1">{title}</h3>
+            {body && (
+                <p className="text-[13px] text-slate-600 mb-4 max-w-[36ch] mx-auto leading-relaxed">
+                    {body}
+                </p>
+            )}
+            {cta && <div className="mt-4 flex justify-center gap-2">{cta}</div>}
+        </div>
+    );
+}
+
+// ── Compatibility shims ──────────────────────────────────────────────
+// The previous primitives (PageHeader, StatCard, EmptyState, PageSection)
+// are still imported across many app pages. Keep thin shims so the new
+// chrome lands without breaking other pages — the sweep will migrate
+// each page to the new vocabulary at its own pace.
+
+export function PageHeader({
+    title,
+    subtitle,
+    children,
+}: {
+    title: string;
+    subtitle?: string;
+    eyebrow?: string;
+    children?: React.ReactNode;
+    className?: string;
+}) {
+    return (
+        <PageTopbar eyebrow={title} subtitle={subtitle}>
+            {children}
+        </PageTopbar>
+    );
+}
+
+export function StatCard({
+    label,
+    value,
+    hint,
+}: {
+    icon?: React.ReactNode;
+    iconTone?: "slate" | "blue" | "emerald" | "amber" | "red" | "violet";
+    label: string;
+    value: string | number;
+    hint?: string;
+}) {
+    return <Stat label={label} value={value} sub={hint} />;
+}
+
+export function EmptyState({
+    title,
+    description,
+    children,
+}: {
+    icon?: React.ReactNode;
+    title: string;
+    description?: string;
+    children?: React.ReactNode;
+}) {
+    return <EmptyBlock title={title} body={description} cta={children} />;
+}
+
+export function PageSection({
+    title,
+    description,
+    actions,
+    children,
+    className,
+}: {
+    title?: string;
+    description?: string;
+    actions?: React.ReactNode;
+    children: React.ReactNode;
+    className?: string;
+}) {
+    return (
+        <section className={className}>
+            {(title || description || actions) && (
+                <SectionBar label={title ?? ""} count={undefined}>
+                    {actions}
+                </SectionBar>
+            )}
+            {children}
+        </section>
+    );
+}

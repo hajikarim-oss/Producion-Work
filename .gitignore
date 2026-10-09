@@ -1,0 +1,45 @@
+# Dependencies
+node_modules/
+**/node_modules/
+.pnpm-store/
+
+# Legacy dump folders
+system/Frontend 101-2/
+system/Frontend-101/
+system/nexus-outbound/
+system/data/
+
+# Build artifacts
+dist/
+**/dist/
+dist-ssr/
+*.local
+
+# Environment files
+.env
+.env.local
+.env.*.local
+!.env.example
+!.env.production
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Editor directories and files
+.vscode/
+.idea/
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Testing
+coverage/
+test-results/

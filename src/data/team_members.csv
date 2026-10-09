@@ -1,0 +1,13 @@
+id,name,email,department,status,joinDate,capacity
+user_001,Sachin,sachin@theboredmonkey.com,CREATIVE,ACTIVE,2024-01-01,🟢 Available
+user_002,Ishan,ishan@theboredmonkey.com,EDITOR,ACTIVE,2024-03-15,🔴 Overloaded
+user_003,Sneha,sneha@theboredmonkey.com,CREATIVE,ACTIVE,2024-04-01,🟢 Available
+user_004,Kunal,kunal@theboredmonkey.com,CREATIVE,ACTIVE,2024-04-15,🟢 Available
+user_005,Pradhi,pradhi@theboredmonkey.com,CREATIVE,ACTIVE,2024-05-01,🟢 Available
+user_006,Hafsa,hafsa@theboredmonkey.com,CREATIVE,ACTIVE,2024-05-15,🟢 Available
+user_007,Shubham,shubham@theboredmonkey.com,EDITOR,ACTIVE,2024-06-01,🔴 Overloaded
+user_008,Chetan,chetan@theboredmonkey.com,EDITOR,ACTIVE,2024-06-15,🔴 Overloaded
+user_009,Chinmay,chinmay@theboredmonkey.com,EDITOR,ACTIVE,2024-07-01,🔴 Busy
+user_010,Ayush,ayush@theboredmonkey.com,EDITOR,ACTIVE,2024-07-10,🔴 Busy
+user_011,Ayush Shukla,ayush.shukla@theboredmonkey.com,EDITOR,ACTIVE,2024-07-15,🔴 Busy
+user_012,Umesh,umesh@theboredmonkey.com,EDITOR,ACTIVE,2024-08-01,🔴 Busy

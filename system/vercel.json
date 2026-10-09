@@ -1,0 +1,10 @@
+{
+  "framework": "vite",
+  "installCommand": "npx pnpm@9.15.4 --dir web install --prefer-frozen-lockfile && npm install --omit=dev --no-audit --no-fund",
+  "buildCommand": "npx pnpm@9.15.4 --dir web build",
+  "outputDirectory": "web/dist",
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": "/api/index" },
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
+}

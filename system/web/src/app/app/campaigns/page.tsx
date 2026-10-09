@@ -1,0 +1,824 @@
+import { NoAccess } from "@/components/layout/NoAccess";
+import { usePermission } from "@/hooks/usePermission";
+import { useUserProfile } from "@/hooks/context/user";
+import useFeatureAccess from "@/hooks/useFeatureAccess";
+import useMembers from "@/lib/api/hooks/app/organizations/useMembers";
+import useCampaigns from "@/lib/api/hooks/app/campaigns/useCampaigns";
+import useStartCampaign from "@/lib/api/hooks/app/campaigns/useStartCampaign";
+import useStopCampaign from "@/lib/api/hooks/app/campaigns/useStopCampaign";
+import useUpdateCampaign from "@/lib/api/hooks/app/campaigns/useUpdateCampaign";
+import { useConfirm } from "@/hooks/context/confirm";
+import { NewCampaignDialog } from "@/components/app/campaigns/NewCampaignDialog";
+import AdvisorRowFlag from "@/components/app/advisor/AdvisorRowFlag";
+import AdvisorSummaryBar from "@/components/app/advisor/AdvisorSummaryBar";
+import { useAdvisorEntityIndex } from "@/lib/api/hooks/app/advisor/useAdvisor";
+import LaunchCampaignDialog from "@/components/app/campaigns/LaunchCampaignDialog";
+import CampaignActionsMenu from "@/components/app/campaigns/CampaignActionsMenu";
+import toast from "react-hot-toast";
+import type { AppError } from "@/lib/api/client/normalizeError";
+import buildError from "@/lib/helper/buildError";
+import type Campaign from "@/lib/api/models/app/campaigns/Campaign";
+import type Folder from "@/lib/api/models/app/Folder";
+import { cn, hexToRgba } from "@/lib/utils";
+import { useMemo, useState } from "react";
+import { Link } from "react-router-dom";
+import {
+    AlertTriangleIcon,
+    CalendarIcon,
+    CheckIcon,
+    CheckCircle2Icon,
+    FileTextIcon,
+    FilterIcon,
+    FolderIcon,
+    HourglassIcon,
+    Loader2Icon,
+    type LucideIcon,
+    PauseIcon,
+    PlayIcon,
+    PlusIcon,
+    RefreshCcwIcon,
+    SendIcon,
+    Settings2Icon,
+    Trash2Icon,
+} from "lucide-react";
+import { useCampaignActions } from "@/components/app/campaigns/useCampaignActions";
+import {
+    EmptyBlock,
+    Page,
+    PageBody,
+    PageTopbar,
+    SectionBar,
+    Stat,
+    StatStrip,
+    TopbarAction,
+} from "@/components/layout/Page";
+import { SearchInput } from "@/components/ui/field";
+import {
+    campaignDisplayLabel,
+    CAMPAIGN_IDLE_TONE,
+    campaignDisplayTone,
+    campaignStatusBucket as statusBucket,
+    campaignStatusTone as statusTone,
+    isIdleCampaign,
+    isOneTimeCampaign,
+} from "@/components/app/campaigns/status";
+import {
+    PopoverMenu,
+    PopoverMenuContent,
+    PopoverMenuItem,
+    PopoverMenuLabel,
+    PopoverMenuSeparator,
+    PopoverMenuTrigger,
+    SelectButton,
+} from "@/components/ui/popover-menu";
+
+type StatusFilter = "all" | "active" | "paused" | "draft" | "completed";
+type KindFilter = "all" | "sequence" | "one_time";
+type SortMode = "newest" | "oldest" | "name";
+
+const KIND_LABEL: Record<KindFilter, string> = {
+    all: "All types",
+    sequence: "Sequences",
+    one_time: "One-time emails",
+};
+
+// Initials for the member strip chips and the per-row ownership marker —
+// every chip keeps the same 16px circle so the strip reads as one rhythm.
+function memberInitials(name: string): string {
+    const parts = name.trim().split(/\s+/).filter(Boolean);
+    if (parts.length === 0) return "?";
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
+// Per-state label + leading mark for a campaign row. "active" renders the
+// animated dot-grid loader; every other state is a 14px lucide icon so the
+// fixed-width leading slot keeps each row's name aligned. The label/tone maps
+// live in components/app/campaigns/status so pickers share them.
+function CampaignStatusMark({ status, idle }: { status: string; idle?: boolean }) {
+    const tone = statusTone(status);
+    if (idle) {
+        return <HourglassIcon className={cn("w-3.5 h-3.5", CAMPAIGN_IDLE_TONE)} aria-label="Waiting for leads" />;
+    }
+    if (status === "active") {
+        return <span className={cn("campaign-grid", tone)} aria-hidden title="Sending now" />;
+    }
+    let Icon: LucideIcon = FileTextIcon;
+    let title = "Draft — not started";
+    if (status === "completed") {
+        Icon = CheckCircle2Icon;
+        title = "Finished";
+    } else if (status === "paused") {
+        Icon = PauseIcon;
+        title = "Paused";
+    } else if (status === "paused_guardrail") {
+        Icon = AlertTriangleIcon;
+        title = "Paused automatically — a deliverability guardrail was breached";
+    } else if (status === "paused_undeliverable") {
+        Icon = AlertTriangleIcon;
+        title = "Paused — address verification refused the remaining leads";
+    } else if (status === "paused_no_accounts" || status === "paused_trial_expired") {
+        Icon = AlertTriangleIcon;
+        title = status === "paused_no_accounts" ? "Paused — no sending accounts" : "Paused — trial expired";
+    }
+    return <Icon className={cn("w-3.5 h-3.5", tone)} aria-label={title} />;
+}
+
+// Read-only chips showing which folders a campaign belongs to — resolves the
+// campaign's folder ids against the user's folders, shows up to 2 then "+N".
+// Each chip is tinted with the folder's own color for a quick visual read.
+function CampaignFolderChips({ campaign, folders }: { campaign: Campaign; folders: Folder[] }) {
+    const mine = (campaign.folders ?? [])
+        .map((id) => folders.find((f) => f.id === id))
+        .filter((f): f is Folder => !!f);
+    if (mine.length === 0) return null;
+    const shown = mine.slice(0, 2);
+    const extra = mine.length - shown.length;
+    return (
+        <span className="hidden sm:flex items-center gap-1.5 shrink-0">
+            {shown.map((f) => (
+                <span
+                    key={f.id}
+                    title={f.title}
+                    className="inline-flex items-center gap-1.5 h-[18px] pl-1.5 pr-2 rounded-full text-[10.5px] font-medium text-slate-700 max-w-[130px]"
+                    style={{ backgroundColor: hexToRgba(f.color, 0.16) }}
+                >
+                    <span
+                        className="inline-block size-2 rounded-full ring-1 ring-black/5 shrink-0"
+                        style={{ backgroundColor: f.color }}
+                    />
+                    <span className="truncate">{f.title}</span>
+                </span>
+            ))}
+            {extra > 0 && (
+                <span
+                    className="inline-flex items-center h-[18px] px-1.5 rounded-full text-[10.5px] font-medium text-slate-500 bg-slate-100"
+                    title={mine.slice(2).map((f) => f.title).join(", ")}
+                >
+                    +{extra}
+                </span>
+            )}
+        </span>
+    );
+}
+
+// Per-row "move to folder" control: a folder button (revealed on hover, or
+// kept visible + sky when the campaign is already filed) that opens a popover
+// of the user's folders. Toggling an item PATCHes the campaign's `folders`
+// array; the menu stays open so several folders can be toggled at once.
+function CampaignFolderMenu({ campaign, folders }: { campaign: Campaign; folders: Folder[] }) {
+    const p = useUserProfile();
+    const update = useUpdateCampaign(campaign.id);
+    const current = campaign.folders ?? [];
+    const inCount = current.length;
+
+    function setFolders(next: string[]) {
+        update.mutate(
+            { folders: next },
+            { onError: (e) => toast.error(buildError(e as unknown as AppError)) },
+        );
+    }
+
+    return (
+        <PopoverMenu align="end">
+            <PopoverMenuTrigger asChild>
+                <button
+                    type="button"
+                    aria-label="Move to folder"
+                    title={
+                        inCount > 0
+                            ? `In ${inCount} folder${inCount === 1 ? "" : "s"}`
+                            : "Move to folder"
+                    }
+                    className={cn(
+                        "size-6 rounded flex items-center justify-center transition-opacity shrink-0",
+                        inCount > 0
+                            ? "text-slate-900 hover:bg-[#FFF9DB] opacity-100"
+                            : "text-slate-400 hover:text-slate-900 hover:bg-slate-100 opacity-100 md:opacity-0 md:group-hover:opacity-100",
+                    )}
+                >
+                    <FolderIcon className="w-3.5 h-3.5" />
+                </button>
+            </PopoverMenuTrigger>
+            <PopoverMenuContent minWidth={200}>
+                <PopoverMenuLabel>Folders</PopoverMenuLabel>
+                {folders.length === 0 ? (
+                    <PopoverMenuItem
+                        onSelect={() => p.setFoldersEdit(true)}
+                        icon={<PlusIcon className="w-3 h-3" />}
+                    >
+                        Create a folder
+                    </PopoverMenuItem>
+                ) : (
+                    folders.map((f) => {
+                        const isIn = current.includes(f.id);
+                        return (
+                            <PopoverMenuItem
+                                key={f.id}
+                                closeOnSelect={false}
+                                selected={isIn}
+                                onSelect={() =>
+                                    setFolders(
+                                        isIn
+                                            ? current.filter((x) => x !== f.id)
+                                            : [...current, f.id],
+                                    )
+                                }
+                                icon={
+                                    <span
+                                        className="inline-block size-2.5 rounded-full ring-1 ring-black/5"
+                                        style={{ backgroundColor: f.color }}
+                                    />
+                                }
+                                trailing={
+                                    isIn ? (
+                                        <CheckIcon className="w-3.5 h-3.5 text-slate-900" strokeWidth={2.5} />
+                                    ) : null
+                                }
+                            >
+                                {f.title}
+                            </PopoverMenuItem>
+                        );
+                    })
+                )}
+                {inCount > 0 && (
+                    <>
+                        <PopoverMenuSeparator />
+                        <PopoverMenuItem danger onSelect={() => setFolders([])}>
+                            Remove from all
+                        </PopoverMenuItem>
+                    </>
+                )}
+                <PopoverMenuSeparator />
+                <PopoverMenuItem
+                    onSelect={() => p.setFoldersEdit(true)}
+                    icon={<Settings2Icon className="w-3 h-3" />}
+                >
+                    Manage folders
+                </PopoverMenuItem>
+            </PopoverMenuContent>
+        </PopoverMenu>
+    );
+}
+
+export default function CampaignsPage() {
+    const p = useUserProfile();
+    const confirm = useConfirm();
+    const canView = usePermission("VIEW_CAMPAIGNS");
+    const access = useFeatureAccess();
+    const membersQuery = useMembers();
+    const startCampaign = useStartCampaign();
+    const stopCampaign = useStopCampaign();
+    const actions = useCampaignActions();
+    const [folder, setFolder] = useState<string>("");
+    const [query, setQuery] = useState<string>("");
+    const [status, setStatus] = useState<StatusFilter>("all");
+    const [kind, setKind] = useState<KindFilter>("all");
+    const [sort, setSort] = useState<SortMode>("newest");
+    const [memberFilter, setMemberFilter] = useState<string>("");
+    const [newOpen, setNewOpen] = useState<boolean>(false);
+    const [launchTarget, setLaunchTarget] = useState<Campaign | null>(null);
+
+    async function toggleCampaign(id: string, currentStatus: string) {
+        try {
+            if (currentStatus === "active") {
+                await toast.promise(stopCampaign.mutateAsync(id), {
+                    loading: "Pausing campaign…",
+                    success: "Campaign paused",
+                    error: (e: AppError) => buildError(e),
+                });
+            } else {
+                await toast.promise(startCampaign.mutateAsync(id), {
+                    loading: "Starting campaign…",
+                    success: "Campaign started",
+                    error: (e: AppError) => buildError(e),
+                });
+            }
+        } catch {
+            /* toast.promise already surfaced */
+        }
+    }
+
+    // Row start/pause: pause asks first, start opens the launch dialog.
+    function toggleRow(c: Campaign) {
+        const cstatus = c.status ?? "draft";
+        if (cstatus === "active") {
+            confirm?.show(`Pause ${c.name}?`, () => toggleCampaign(c.id, cstatus));
+        } else {
+            setLaunchTarget(c);
+        }
+    }
+
+    const campaignsData = useCampaigns({ query, folder });
+    // One query for the surface; a step's copy problem indexes onto its parent
+    // campaign, so it flags the row even though the step has no row of its own.
+    const advisor = useAdvisorEntityIndex("campaigns");
+    const campaigns = campaignsData.campaigns ?? [];
+
+    // Ownership is stamped on each row by the live campaigns merge
+    // (`userId`); rows the database never saw belong to the master.
+    const isMaster = access.canManage;
+    const currentUserId = p.user.id;
+    const currentUserEmail = (p.user.email || "").toLowerCase();
+    const members = membersQuery.data ?? [];
+    const teamMembers = members.filter((m) => m.role !== "owner");
+    const memberByUserId = new Map(members.map((m) => [m.user_id, m]));
+    const ownerUserId = members.find((m) => m.role === "owner")?.user_id ?? p.user.id ?? "";
+    const ownerOf = (c: Campaign) => String(c.userId || (c as any).user_id || "") || ownerUserId;
+
+    const isMine = (c: Campaign) => {
+        const uId = String(c.userId || (c as any).user_id || "");
+        if (uId && uId === currentUserId) return true;
+        if (isMaster && (!uId || uId === ownerUserId)) return true;
+        if (!uId || isMaster) return true;
+        return false;
+    };
+
+    const folders = p.user.folders ?? [];
+    const activeFolder = folders.find((f) => f.id === folder);
+
+    const scopedCampaigns = useMemo(() => {
+        if (!isMaster) {
+            return campaigns;
+        }
+        if (memberFilter) {
+            return campaigns.filter((c) => ownerOf(c) === memberFilter);
+        }
+        return campaigns;
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [campaigns, isMaster, currentUserId, currentUserEmail, memberFilter]);
+
+    const filtered = useMemo(() => {
+        const base = scopedCampaigns.filter(
+            (c) =>
+                (status === "all" || statusBucket(c.status) === status) &&
+                (kind === "all" || (c.kind ?? "sequence") === kind),
+        );
+        const sorted = [...base];
+        if (sort === "newest") {
+            sorted.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+        } else if (sort === "oldest") {
+            sorted.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+        } else {
+            sorted.sort((a, b) => (a.name ?? "").localeCompare(b.name ?? ""));
+        }
+        return sorted;
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [scopedCampaigns, status, kind, sort]);
+
+    const counts = useMemo(() => {
+        const stats = { total: scopedCampaigns.length, active: 0, paused: 0, draft: 0, completed: 0 };
+        for (const c of scopedCampaigns) {
+            stats[statusBucket(c.status)]++;
+        }
+        return stats;
+    }, [scopedCampaigns]);
+
+    if (!canView) return <NoAccess feature="campaigns" permissionLabel="View campaigns" />;
+
+    return (
+        <Page>
+            <PageTopbar
+                eyebrow="Campaigns"
+                subtitle={
+                    campaignsData.isPending
+                        ? "Loading…"
+                        : campaignsData.isError
+                            ? "Failed to load"
+                            : `${scopedCampaigns.length} ${scopedCampaigns.length === 1 ? "campaign" : "campaigns"}`
+                }
+            >
+                <TopbarAction
+                    variant="ghost"
+                    icon={<Settings2Icon className="w-3 h-3" />}
+                    onClick={() => p.setFoldersEdit(true)}
+                >
+                    Folders
+                </TopbarAction>
+                <TopbarAction
+                    icon={<PlusIcon className="w-3 h-3" />}
+                    onClick={() => setNewOpen(true)}
+                >
+                    New campaign
+                </TopbarAction>
+            </PageTopbar>
+
+            <StatStrip cols={5}>
+                <Stat
+                    label="All"
+                    value={counts.total}
+                    sub="campaigns"
+                    onClick={() => setStatus("all")}
+                />
+                <Stat
+                    label="Active"
+                    value={counts.active}
+                    sub="sending now"
+                    accent={counts.active > 0}
+                    onClick={() => setStatus("active")}
+                />
+                <Stat
+                    label="Paused"
+                    value={counts.paused}
+                    sub="resumable"
+                    onClick={() => setStatus("paused")}
+                />
+                <Stat
+                    label="Draft"
+                    value={counts.draft}
+                    sub="not started"
+                    onClick={() => setStatus("draft")}
+                />
+                <Stat
+                    label="Done"
+                    value={counts.completed}
+                    sub="finished"
+                    last
+                    onClick={() => setStatus("completed")}
+                />
+            </StatStrip>
+
+            {/* Master-only team strip: each member chip shows how many
+                campaigns are theirs; selecting one narrows the list (and the
+                status counts above) to that member's work. */}
+            {access.canManage && teamMembers.length > 0 && (
+                <div className="px-5 pt-3 flex items-center gap-1.5 overflow-x-auto">
+                    <button
+                        type="button"
+                        onClick={() => setMemberFilter("")}
+                        className={cn(
+                            "inline-flex items-center gap-1.5 h-7 pl-2.5 pr-2.5 rounded-full border text-[11.5px] font-medium transition-colors shrink-0",
+                            memberFilter === ""
+                                ? "bg-slate-900 text-white border-slate-900"
+                                : "bg-white text-slate-600 border-slate-200 hover:border-slate-300 hover:text-slate-900",
+                        )}
+                    >
+                        Everyone
+                        <span className={cn("font-mono text-[10.5px] tabular-nums", memberFilter === "" ? "text-white/70" : "text-slate-400")}>
+                            {campaigns.length}
+                        </span>
+                    </button>
+                    {teamMembers.map((m) => {
+                        const count = campaigns.filter((c) => {
+                            const ownerId = String(c.userId || (c as any).user_id || "");
+                            const memberId = String(m.user_id || "");
+                            return ownerId === memberId;
+                        }).length;
+                        const active = memberFilter === m.user_id;
+                        return (
+                            <button
+                                key={m.user_id}
+                                type="button"
+                                title={`Campaigns owned by ${m.name || m.email || "member"}`}
+                                onClick={() => setMemberFilter(active ? "" : m.user_id)}
+                                className={cn(
+                                    "inline-flex items-center gap-1.5 h-7 pl-1 pr-2.5 rounded-full border text-[11.5px] font-medium transition-colors shrink-0",
+                                    active
+                                        ? "bg-slate-900 text-white border-slate-900"
+                                        : "bg-white text-slate-600 border-slate-200 hover:border-slate-300 hover:text-slate-900",
+                                )}
+                            >
+                                <span
+                                    className={cn(
+                                        "grid place-items-center size-4 rounded-full text-[8.5px] font-semibold shrink-0",
+                                        active ? "bg-white/20 text-white" : "bg-slate-100 text-slate-500",
+                                    )}
+                                >
+                                    {memberInitials(m.name || m.email || "?")}
+                                </span>
+                                {m.name || m.email || "Member"}
+                                <span className={cn("font-mono text-[10.5px] tabular-nums", active ? "text-white/70" : "text-slate-400")}>
+                                    {count}
+                                </span>
+                            </button>
+                        );
+                    })}
+                </div>
+            )}
+
+            <SectionBar
+                label={status === "all" ? "All campaigns" : `${status[0].toUpperCase()}${status.slice(1)}`}
+                count={filtered.length}
+            >
+                <SearchInput
+                    value={query}
+                    onChange={setQuery}
+                    placeholder="Search campaigns…"
+                    className="w-full sm:w-56"
+                />
+
+                <PopoverMenu align="end">
+                    <PopoverMenuTrigger asChild>
+                        <SelectButton
+                            icon={<FolderIcon className="w-3.5 h-3.5" />}
+                            label={activeFolder?.title ?? "All folders"}
+                        />
+                    </PopoverMenuTrigger>
+                    <PopoverMenuContent minWidth={200}>
+                        <PopoverMenuLabel>Folders</PopoverMenuLabel>
+                        <PopoverMenuItem
+                            onSelect={() => setFolder("")}
+                            selected={!folder}
+                        >
+                            All folders
+                        </PopoverMenuItem>
+                        {folders.map((f) => (
+                            <PopoverMenuItem
+                                key={f.id}
+                                onSelect={() => setFolder(folder === f.id ? "" : f.id)}
+                                icon={<span className="inline-block size-2 rounded-full" style={{ backgroundColor: f.color }} />}
+                                selected={folder === f.id}
+                            >
+                                {f.title}
+                            </PopoverMenuItem>
+                        ))}
+                        <PopoverMenuSeparator />
+                        <PopoverMenuItem
+                            onSelect={() => p.setFoldersEdit(true)}
+                            icon={<Settings2Icon className="w-3 h-3" />}
+                        >
+                            Manage folders
+                        </PopoverMenuItem>
+                    </PopoverMenuContent>
+                </PopoverMenu>
+
+                <PopoverMenu align="end">
+                    <PopoverMenuTrigger asChild>
+                        <SelectButton
+                            icon={<SendIcon className="w-3.5 h-3.5" />}
+                            label={KIND_LABEL[kind]}
+                        />
+                    </PopoverMenuTrigger>
+                    <PopoverMenuContent minWidth={180}>
+                        <PopoverMenuLabel>Type</PopoverMenuLabel>
+                        {(Object.keys(KIND_LABEL) as KindFilter[]).map((k) => (
+                            <PopoverMenuItem key={k} selected={kind === k} onSelect={() => setKind(k)}>
+                                {KIND_LABEL[k]}
+                            </PopoverMenuItem>
+                        ))}
+                    </PopoverMenuContent>
+                </PopoverMenu>
+
+                <PopoverMenu align="end">
+                    <PopoverMenuTrigger asChild>
+                        <SelectButton
+                            icon={<FilterIcon className="w-3.5 h-3.5" />}
+                            label={
+                                sort === "newest"
+                                    ? "Newest"
+                                    : sort === "oldest"
+                                        ? "Oldest"
+                                        : "Name"
+                            }
+                        />
+                    </PopoverMenuTrigger>
+                    <PopoverMenuContent>
+                        <PopoverMenuLabel>Sort</PopoverMenuLabel>
+                        <PopoverMenuItem
+                            selected={sort === "newest"}
+                            onSelect={() => setSort("newest")}
+                        >
+                            Newest first
+                        </PopoverMenuItem>
+                        <PopoverMenuItem
+                            selected={sort === "oldest"}
+                            onSelect={() => setSort("oldest")}
+                        >
+                            Oldest first
+                        </PopoverMenuItem>
+                        <PopoverMenuItem
+                            selected={sort === "name"}
+                            onSelect={() => setSort("name")}
+                        >
+                            Name (A–Z)
+                        </PopoverMenuItem>
+                    </PopoverMenuContent>
+                </PopoverMenu>
+            </SectionBar>
+
+            <PageBody>
+                <AdvisorSummaryBar
+                    surface="campaigns"
+                    noun="campaign"
+                    nounPlural="campaigns"
+                    className="mx-5 mt-3"
+                />
+                {campaignsData.isPending ? (
+                    <SkeletonRows />
+                ) : campaignsData.isError ? (
+                    <ErrorState
+                        message={
+                            campaignsData.error?.message ||
+                            "The request failed. The backend may be down or returning an error."
+                        }
+                        onRetry={() => campaignsData.refetch()}
+                        isRefetching={campaignsData.isFetching}
+                    />
+                ) : filtered.length === 0 ? (
+                    campaigns.length === 0 ? (
+                        <EmptyBlock
+                            title="No campaigns yet"
+                            body="Create your first sequence to start reaching prospects."
+                            cta={
+                                <TopbarAction
+                                    icon={<PlusIcon className="w-3 h-3" />}
+                                    onClick={() => setNewOpen(true)}
+                                >
+                                    New campaign
+                                </TopbarAction>
+                            }
+                        />
+                    ) : (
+                        <EmptyBlock
+                            title={`No ${status} campaigns`}
+                            body={`Switch to “All” to see every sequence.`}
+                            cta={
+                                <TopbarAction onClick={() => setStatus("all")} variant="ghost">
+                                    Show all
+                                </TopbarAction>
+                            }
+                        />
+                    )
+                ) : (
+                    <div className="divide-y divide-slate-200/60">
+                        {filtered.map((c) => {
+                            const cstatus = c.status ?? "draft";
+                            const stateLabel = campaignDisplayLabel(c);
+                            const StateIcon =
+                                cstatus === "active" ? PauseIcon : PlayIcon;
+                            const rowOwner = ownerOf(c);
+                            const rowMember =
+                                access.canManage && rowOwner && rowOwner !== ownerUserId
+                                    ? memberByUserId.get(rowOwner)
+                                    : null;
+                            return (
+                                <Link
+                                    key={c.id}
+                                    to={`/app/campaigns/${c.id}`}
+                                    className="group h-11 px-5 flex items-center gap-3 hover:bg-slate-50 transition-colors"
+                                >
+                                    {/* Fixed-width leading slot so every row's name aligns,
+                                        whatever state mark (loader or icon) sits in it. */}
+                                    <span className="shrink-0 w-3.5 flex items-center justify-center">
+                                        <CampaignStatusMark status={cstatus} idle={isIdleCampaign(c)} />
+                                    </span>
+                                    <span className="text-[12.5px] text-slate-900 font-medium truncate max-w-[40%]">
+                                        {c.name}
+                                    </span>
+                                    {rowMember && (
+                                        <span
+                                            title={`Owned by ${rowMember.name || rowMember.email || "member"}`}
+                                            className="grid place-items-center size-4 rounded-full bg-slate-100 text-slate-500 text-[8.5px] font-semibold shrink-0 ring-1 ring-slate-200/80"
+                                        >
+                                            {memberInitials(rowMember.name || rowMember.email || "?")}
+                                        </span>
+                                    )}
+                                    <span
+                                        className="font-mono text-[10.5px] text-slate-500 tabular-nums shrink-0 hidden sm:inline bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200/80"
+                                        title={`Full ID: ${c.id}`}
+                                    >
+                                        {c.providerCampaignId ? `#${c.providerCampaignId}` : `#${c.id.replace(/^cmp_/, "").slice(-6)}`}
+                                    </span>
+                                    {isOneTimeCampaign(c) && (
+                                        <span
+                                            title="One-time email: a single message, no follow-ups"
+                                            className="inline-flex items-center gap-1 h-[18px] px-1.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200/60 text-[10px] font-medium uppercase tracking-[0.1em] shrink-0"
+                                        >
+                                            <SendIcon className="w-2.5 h-2.5" />
+                                            One-time
+                                        </span>
+                                    )}
+                                    <AdvisorRowFlag findings={advisor.get(c.id)} subject={c.name} />
+                                    <CampaignFolderChips campaign={c} folders={folders} />
+                                    {c.description && (
+                                        <span className="text-[11.5px] text-slate-400 truncate hidden md:inline">
+                                            {c.description}
+                                        </span>
+                                    )}
+                                    <span className={cn("ml-auto text-[10px] uppercase tracking-[0.1em] font-medium shrink-0", campaignDisplayTone(c))}>
+                                        {stateLabel}
+                                    </span>
+                                    <span className="font-mono text-[10.5px] text-slate-400 tabular-nums items-center gap-1 shrink-0 hidden sm:flex">
+                                        <CalendarIcon className="w-3 h-3" />
+                                        {c.created_at
+                                            ? new Date(c.created_at).toLocaleDateString("en-US", {
+                                                month: "short",
+                                                day: "numeric",
+                                            })
+                                            : "—"}
+                                    </span>
+                                    <CampaignFolderMenu campaign={c} folders={folders} />
+                                    <button
+                                        type="button"
+                                        onClick={(e) => {
+                                            e.preventDefault();
+                                            e.stopPropagation();
+                                            toggleRow(c);
+                                        }}
+                                        disabled={
+                                            (cstatus === "active" && stopCampaign.isPending) ||
+                                            (cstatus !== "active" && startCampaign.isPending)
+                                        }
+                                        className="size-6 rounded text-slate-400 hover:text-slate-900 hover:bg-slate-100 flex items-center justify-center opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity shrink-0 disabled:opacity-30 cursor-pointer"
+                                        aria-label={
+                                            cstatus === "active" ? "Pause campaign" : "Start campaign"
+                                        }
+                                    >
+                                        <StateIcon className="w-3.5 h-3.5" />
+                                    </button>
+                                    {access.isOwner && (
+                                        <button
+                                            type="button"
+                                            onClick={(e) => {
+                                                e.preventDefault();
+                                                e.stopPropagation();
+                                                actions.requestDelete(c);
+                                            }}
+                                            disabled={actions.deleting}
+                                            className="size-6 rounded text-slate-400 hover:text-red-600 hover:bg-red-50 flex items-center justify-center opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity shrink-0 disabled:opacity-30 cursor-pointer"
+                                            title="Delete campaign"
+                                            aria-label="Delete campaign"
+                                        >
+                                            <Trash2Icon className="w-3.5 h-3.5" />
+                                        </button>
+                                    )}
+                                    <CampaignActionsMenu
+                                        campaign={c}
+                                        variant="row"
+                                        onToggle={() => toggleRow(c)}
+                                    />
+                                </Link>
+                            );
+                        })}
+                    </div>
+                )}
+            </PageBody>
+
+            <NewCampaignDialog open={newOpen} onClose={() => setNewOpen(false)} />
+            <LaunchCampaignDialog
+                campaign={launchTarget}
+                onClose={() => setLaunchTarget(null)}
+                onConfirm={(id, options) => startCampaign.mutateAsync({ id, options })}
+            />
+        </Page>
+    );
+}
+
+function ErrorState({
+    message,
+    onRetry,
+    isRefetching,
+}: {
+    message: string;
+    onRetry: () => void;
+    isRefetching: boolean;
+}) {
+    return (
+        <div className="px-5 py-12 text-center">
+            <div className="mx-auto mb-3 size-8 rounded-md bg-red-50 text-red-600 flex items-center justify-center">
+                <AlertTriangleIcon className="w-4 h-4" />
+            </div>
+            <p className="text-[12.5px] text-slate-900 font-medium">Couldn't load campaigns</p>
+            <p className="text-[11.5px] text-slate-500 mt-1 max-w-[44ch] mx-auto leading-relaxed">
+                {message}
+            </p>
+            <div className="mt-4 flex items-center justify-center gap-1.5">
+                <button
+                    type="button"
+                    onClick={onRetry}
+                    disabled={isRefetching}
+                    className="h-7 px-2.5 rounded-md bg-slate-900 hover:bg-slate-800 text-white text-[12px] font-medium inline-flex items-center gap-1.5 transition-colors disabled:opacity-60"
+                >
+                    {isRefetching ? (
+                        <Loader2Icon className="w-3 h-3 animate-spin" />
+                    ) : (
+                        <RefreshCcwIcon className="w-3 h-3" />
+                    )}
+                    Try again
+                </button>
+                <button
+                    type="button"
+                    onClick={() => window.location.reload()}
+                    className="h-7 px-2.5 rounded-md border border-slate-200 hover:border-slate-300 text-slate-700 hover:text-slate-900 text-[12px] font-medium transition-colors"
+                >
+                    Reload page
+                </button>
+            </div>
+        </div>
+    );
+}
+
+function SkeletonRows() {
+    return (
+        <div className="divide-y divide-slate-200/60">
+            {Array.from({ length: 8 }).map((_, i) => (
+                <div key={i} className="h-11 px-5 flex items-center gap-3">
+                    <div className="size-1.5 rounded-full bg-slate-200" />
+                    <div className="h-3 w-44 bg-slate-100 rounded animate-pulse" />
+                    <div className="font-mono h-3 w-12 bg-slate-100 rounded animate-pulse" />
+                    <div className="ml-auto h-3 w-16 bg-slate-100 rounded animate-pulse" />
+                </div>
+            ))}
+        </div>
+    );
+}
