@@ -1,5 +1,5 @@
 import type { AxiosRequestConfig, AxiosResponse, InternalAxiosRequestConfig } from "axios";
-import { buildCategories, buildSegments, type CategoryCount } from "../../../../server/segments";
+import { buildCategories, buildSegments, type CategoryCount } from "./segments";
 import getToken from "../helper/getToken";
 
 // Helper to attach real bearer authorization to server queries
